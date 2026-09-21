@@ -1,0 +1,247 @@
+================================================================================
+task1 运行命令汇总（赛道四 任务一 / 任务二）
+================================================================================
+适用范围：task1 位于管线仓库的「上一层」，与仓库目录并列。
+本机示例（服务器实际路径）： 上一层 = /2026aicompetition/workspace/dcs
+                             仓库   = /2026aicompetition/workspace/dcs/Glioma_recognition
+                             task1  = /2026aicompetition/workspace/dcs/task1
+
+两条铁律：
+  1) 所有 `python -m task1.*` 命令都在【上一层】执行（不是仓库目录、不是 task1 目录）；
+  2) 只有启动推理服务要 cd 进【仓库目录】，并且要让 PYTHONPATH 指向【上一层】。
+
+首次上手顺序： 第1节 -> 第2节 -> 第3节 -> 第4节 -> 第5节 -> 第6节 -> 第7节 -> 第8节
+
+--------------------------------------------------------------------------------
+1. 准备：登录后设路径与装依赖（每个新开的 shell 都要先做 1.1）
+--------------------------------------------------------------------------------
+
+1.1 设定环境变量（把这一整段粘进 shell）
+
+export TASK1_PARENT=/2026aicompetition/workspace/dcs
+export COMPETITION_REPO=/2026aicompetition/workspace/dcs/Glioma_recognition
+export TASK1_DATA_ROOT=/2026aicompetition/datasets/training
+export TASK1_RUN_DIR=/2026aicompetition/workspace/task1_runs
+export TASK1_LOG_DIR=/2026aicompetition/workspace/logs
+export PYTHONPATH=$TASK1_PARENT${PYTHONPATH:+:$PYTHONPATH}
+
+1.2 检查变量没有拼错（路径打错是最高频的报错原因）
+
+echo "[$TASK1_PARENT] [$TASK1_DATA_ROOT] [$TASK1_RUN_DIR] [$TASK1_LOG_DIR]"
+ls -d "$TASK1_PARENT" "$COMPETITION_REPO" "$TASK1_DATA_ROOT"
+
+1.3 装依赖（管线依赖 + task1 依赖；新版 Loader 新增 openpyxl）
+
+cd "$COMPETITION_REPO" && python -m pip install -r requirements.txt
+cd "$TASK1_PARENT" && python -m pip install -r task1/requirements.txt
+
+# CUDA 12.1 机器建议用官方源装 torch，避免被换成 CPU 版：
+# python -m pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu121
+
+1.4 确认 GPU 与 task1 可导入
+
+python -c "import torch, timm; print(torch.__version__, torch.cuda.is_available(), torch.cuda.device_count())"
+cd "$TASK1_PARENT" && python -c "import task1.pipeline_factory as f; print('factory ok:', f.__name__)"
+
+--------------------------------------------------------------------------------
+2. 数据体检（不需要 GPU，几秒钟；必须先跑）
+--------------------------------------------------------------------------------
+
+cd "$TASK1_PARENT"
+python -m task1.dataset --data-root "$TASK1_DATA_ROOT" --out-dir "$TASK1_RUN_DIR"
+
+# 看输出的 JSON：positives 必须 > 0（来自 annotation/fake/），by_split.val.positives 也要 > 0
+# 正常影像目录不在默认位置时，加 --annotation-root <含 fake 的那层>
+# 产物：$TASK1_RUN_DIR/manifest.jsonl（本次训练的数据清单，可复现）
+
+--------------------------------------------------------------------------------
+3. 冒烟训练（2~5 分钟，先确认环境/显存/日志都正常）
+--------------------------------------------------------------------------------
+
+cd "$TASK1_PARENT"
+python -m task1.train --data-root "$TASK1_DATA_ROOT" --out-dir "$TASK1_RUN_DIR/smoke" --log-dir "$TASK1_LOG_DIR" --smoke-test --epochs 1 --batch-size 2 --slices-per-case 8 --image-size 128 --limit-per-class 32 --num-workers 2
+
+# 成功标志： $TASK1_RUN_DIR/smoke/best.pt 存在， $TASK1_LOG_DIR/training.jsonl 有内容
+
+--------------------------------------------------------------------------------
+4. 正式训练（从零训练，不下载任何预训练权重）
+--------------------------------------------------------------------------------
+
+# 4.1 单卡训练（后台跑 + 落日志，SSH 断开不影响）
+cd "$TASK1_PARENT"
+nohup python -m task1.train --data-root "$TASK1_DATA_ROOT" --out-dir "$TASK1_RUN_DIR/seed42" --log-dir "$TASK1_LOG_DIR" --epochs 40 --batch-size 4 --slices-per-case 16 --image-size 224 --num-workers 8 --val-fraction 0.15 --patience 10 --seed 42 --device auto --amp 1 > "$TASK1_RUN_DIR/train_seed42.log" 2>&1 &
+tail -f "$TASK1_RUN_DIR/train_seed42.log"
+
+# 显存不够时按顺序降： --batch-size 4 -> 2 -> 1，再 --slices-per-case 16 -> 8
+# CPU 机器加 --device cpu（很慢，只适合验证链路）
+# 复用第2节生成的清单： 把 --data-root ... 换成 --manifest "$TASK1_RUN_DIR/manifest.jsonl"
+
+# 4.2 多种子集成（推荐；val 阳性少时单次结果方差大）
+cd "$TASK1_PARENT"
+for s in 42 2026 7; do nohup python -m task1.train --data-root "$TASK1_DATA_ROOT" --out-dir "$TASK1_RUN_DIR/seed$s" --log-dir "$TASK1_LOG_DIR" --epochs 40 --batch-size 4 --seed $s > "$TASK1_RUN_DIR/train_seed$s.log" 2>&1 & done
+
+--------------------------------------------------------------------------------
+5. 查看训练结果
+--------------------------------------------------------------------------------
+
+cat "$TASK1_RUN_DIR/seed42/summary.json"
+ls -lh "$TASK1_RUN_DIR/seed42"
+tail -n 5 "$TASK1_LOG_DIR/training.jsonl"
+
+# 关注 val_case_AP（检查级 AP）；目录里的产物：
+#   best.pt（推理用） last.pt  manifest.jsonl（数据清单） summary.json（超参/耗时/最佳轮次）
+# 每个 best.pt 约 106 MB，多种子注意磁盘余量
+
+--------------------------------------------------------------------------------
+6. 任务二自检 + 拼接阈值标定（建议训练后立刻做）
+--------------------------------------------------------------------------------
+
+cd "$TASK1_PARENT"
+
+# 6.1 两条规则的准确率自检：Composition 召回（拼接）、duplicate 金标准召回（重复）、正常影像误报
+python -m task1.goal2 --data-root "$TASK1_DATA_ROOT" --out-dir "$TASK1_RUN_DIR"
+
+# 6.2 只用 Composition vs 正常影像重新标定拼接阈值（按目标 FPR 取分位）
+python -m task1.stitched --data-root "$TASK1_DATA_ROOT" --out-dir "$TASK1_RUN_DIR" --target-fpr 0.05
+# 效果不好可换口径再标一次：
+# python -m task1.stitched --data-root "$TASK1_DATA_ROOT" --out-dir "$TASK1_RUN_DIR" --metric local --stat p99 --band 0.2
+
+# 6.3 把标定输出里的 threshold 写进环境变量（下次启动服务前设置）
+export TASK2_STITCHED_THRESHOLD=0.05
+export TASK2_GATED_FIELDS=goal3,goal4,goal5
+
+# 产物： $TASK1_RUN_DIR/goal2_evaluation.json 、 $TASK1_RUN_DIR/stitched_calibration.json
+
+--------------------------------------------------------------------------------
+7. 离线自测（不启动服务，先验证打分链路）
+--------------------------------------------------------------------------------
+
+cd "$TASK1_PARENT"
+
+# 7.1 批量打分 + 指标（--dataset 给 NIfTI 目录；有标签可换成 --manifest ... --data-root ...）
+python -m task1.score_dataset --dataset /path/to/testset --out-dir "$TASK1_RUN_DIR/predict" --checkpoint "$TASK1_RUN_DIR/seed42/best.pt"
+
+# 7.2 本地端到端跑一次完整管线（任务一 + 任务二 + 占位任务，不发 callback）
+python -m task1.run_local_eval --dataset /path/to/testset --output "$TASK1_RUN_DIR/answer" --evaluation-id demo-001
+
+# 自检测试（22 项，在上一层执行）
+python -m unittest discover -s task1/tests -t . -v
+
+--------------------------------------------------------------------------------
+8. 启动推理服务（测评容器）
+--------------------------------------------------------------------------------
+
+cd "$COMPETITION_REPO"
+
+export PYTHONPATH=$TASK1_PARENT${PYTHONPATH:+:$PYTHONPATH}
+export COMPETITION_PIPELINE_FACTORY=task1.pipeline_factory:build_pipeline
+export TASK1_DEVICE=auto
+export TASK1_BATCH_SLICES=32
+export TASK2_STITCHED_THRESHOLD=0.05
+
+# 权重：单模型
+export TASK1_WEIGHTS="$TASK1_RUN_DIR/seed42/best.pt"
+# 权重：多种子集成（Linux 用冒号分隔）
+# export TASK1_WEIGHTS="$TASK1_RUN_DIR/seed42/best.pt:$TASK1_RUN_DIR/seed2026/best.pt:$TASK1_RUN_DIR/seed7/best.pt"
+
+./start.sh
+# 等价写法： python -m uvicorn app.server:app --host 0.0.0.0 --port 8000
+
+# 另开一个 shell 做健康检查与一次调用
+curl http://127.0.0.1:8000/health
+curl -X POST http://127.0.0.1:8000/call -H 'Content-Type: application/json' -d '{"request_id":"t-1","team_id":"team","track_code":"track4","input":{"evaluation_id":"e-1","dataset_path":"/data/testset"}}'
+
+--------------------------------------------------------------------------------
+9. 上线前预检（新版 Loader 的原文件规则 + SeriesType.xlsx）
+--------------------------------------------------------------------------------
+
+cd "$COMPETITION_REPO"
+python -c "from data.loader import DatasetLoader; it=DatasetLoader().iter_studies('/data/testset'); s=next(it); print(s.accession_number, [(x.source_path.name, x.modality) for x in s.series])"
+
+# 若报 "... exactly one original"：某个序列目录里有多个 NIfTI 却没有同名原文件，
+# 这是框架行为，需与赛方确认文件命名，task1 无法兜底。
+
+--------------------------------------------------------------------------------
+10. 环境变量速查
+--------------------------------------------------------------------------------
+
+路径类
+  TASK1_PARENT                  task1 所在目录（脚本自检时用，脚本本身不读它）
+  COMPETITION_REPO              管线仓库目录
+  TASK1_DATA_ROOT               训练数据根目录（含 annotation/），默认 /2026aicompetition/datasets/training
+  TASK1_RUN_DIR                 训练产物目录，默认 $COMPETITION_WORKSPACE/task1_runs
+  TASK1_LOG_DIR                 训练日志目录（赛方要求 /2026aicompetition/workspace/logs）
+  PYTHONPATH                    必须含 TASK1_PARENT，否则仓库 import 不到 task1.pipeline_factory
+
+任务一（推理）
+  COMPETITION_PIPELINE_FACTORY  = task1.pipeline_factory:build_pipeline
+  TASK1_WEIGHTS                 权重路径，多个用 ':' 分隔（集成取均值）
+  TASK1_DEVICE                  auto | cpu | cuda | cuda:0
+  TASK1_BATCH_SLICES            每次前向切片数（显存不够就降）
+  TASK1_SERIES_AGGREGATION      max（默认）| mean
+  TASK1_MODEL_AGGREGATION       mean（默认）| max
+  TASK1_FALLBACK_PROB           所有序列都读不出来时的兜底概率，默认 0.5
+  TASK1_STRICT                  1 = 权重缺失直接启动失败（自检用）
+
+任务二（拼接 + 重复 + 闸门）
+  TASK2_STITCHED                1/0 是否启用拼接检测
+  TASK2_STITCHED_THRESHOLD      判定阈值（必须用第6节标定结果）
+  TASK2_STITCHED_METRIC         curvature（默认）| adjacent | local
+  TASK2_STITCHED_STAT           max（默认）| p99 | mean
+  TASK2_STITCHED_BAND           两端丢弃比例，默认 0.1
+  TASK2_DUPLICATE               1/0 是否启用重复检测
+  TASK2_DUPLICATE_SCAN          1 = 先扫全库建中间层索引（默认）；0 = 增量比对
+  TASK2_DUPLICATE_SCAN_MAX_VOLUMES  全库扫描条数上限（0 = 不限）
+  TASK2_DUPLICATE_GATE          命中重复后是否对下游上闸
+  TASK2_GATED_FIELDS            被闸门拦下的任务，默认 goal3,goal4,goal5
+  TASK2_MAX_PAIRS               每例最多候选对，默认 200
+
+--------------------------------------------------------------------------------
+11. 关键输出位置
+--------------------------------------------------------------------------------
+
+  $TASK1_RUN_DIR/manifest.jsonl                训练数据清单与 train/val 划分
+  $TASK1_RUN_DIR/seed*/best.pt                推理用权重
+  $TASK1_RUN_DIR/seed*/summary.json           超参、best_case_ap、耗时
+  $TASK1_LOG_DIR/training.jsonl               赛方规范训练日志
+  $TASK1_RUN_DIR/goal2_evaluation.json        任务二规则自检结果
+  $TASK1_RUN_DIR/stitched_calibration.json    拼接阈值标定结果
+  /2026aicompetition/workspace/answer/<evaluation_id>/
+        duplicate_pairs.jsonl                  重复影像对
+        <AccessionNumber>/prediction.json     每例预测（IsNotHumanBodyProb / IsStitchedProb 等）
+        <AccessionNumber>/<SeriesUid>/<SeriesUid>.nii.gz   分割掩膜
+
+--------------------------------------------------------------------------------
+12. 常见报错处置
+--------------------------------------------------------------------------------
+
+  bash: .dataset: command not found / No module named task1.__main__
+      -> 命令被换行拆断了：python -m task1 和 .dataset 之间不能有换行，必须一整行。
+
+  FileNotFoundError: data root not found
+      -> 路径拼错（注意 aicompetition 别写成 aicomprtition），先 ls -d "$TASK1_DATA_ROOT" 验证。
+
+  ModuleNotFoundError: No module named 'task1'
+      -> 不在【上一层】执行；或 PYTHONPATH 没设。cd "$TASK1_PARENT" 再跑。
+
+  ModuleNotFoundError: No module named 'openpyxl'
+      -> 新版 Loader 依赖：cd "$COMPETITION_REPO" && python -m pip install -r requirements.txt
+
+  ModuleNotFoundError: No module named 'tasks' / 'pipeline'（在 task1 里跑时报）
+      -> task1/_bootstrap.py 找不到仓库；确认 task1 与仓库目录并列，且仓库目录名随意但必须含 pipeline/inference.py
+
+  CUDA out of memory
+      -> 降 --batch-size，再降 --slices-per-case；必要时 --image-size 160（改了要重训）
+
+  val 没有阳性样本 / val_case_AP 显示 null
+      -> 调大 --val-fraction 或换 --seed，或补 annotation/fake/ 数据
+
+  mkdir: missing operand
+      -> 环境变量为空。训练/扫描脚本会自建目录，不需要手动 mkdir；用 echo 检查变量。
+
+  想知道服务为什么启动失败 / 推理报错
+      -> 看 $TASK1_LOG_DIR/training.jsonl（训练）与 $COMPETITION_WORKSPACE/logs/inference.jsonl（推理）
+
+================================================================================
+（本文件仅作操作记录，不属于 task1 代码包；上传与否都不影响运行）
+================================================================================

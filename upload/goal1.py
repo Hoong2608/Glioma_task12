@@ -15,6 +15,7 @@ from tasks.base import StudyTask  # noqa: E402
 from tasks.results import Goal1Result  # noqa: E402
 
 from .config import Task1Config  # noqa: E402
+from .preprocess import series_types  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,7 @@ class NotHumanBodyTask(StudyTask[Goal1Result]):
 
     def predict(self, context) -> Goal1Result:
         study = context.study
+        types = series_types(study)
         if self.scorer is None:
             context.warnings.append(
                 f"{FALLBACK_WARNING} ({self.load_error or 'model not loaded'})"
@@ -67,6 +69,7 @@ class NotHumanBodyTask(StudyTask[Goal1Result]):
                 "source": "fallback",
                 "probability": self.config.fallback_probability,
                 "load_error": self.load_error,
+                "series_types": types,
             }
             return Goal1Result(not_human_probability=self.config.fallback_probability)
 
@@ -75,6 +78,8 @@ class NotHumanBodyTask(StudyTask[Goal1Result]):
         )
         probability = result.probability
         detail = result.as_dict()
+        for item in detail.get("series", []):
+            item["series_type"] = types.get(str(item.get("series_uid", "")), "")
         if probability is None:
             probability = self.config.fallback_probability
             detail["source"] = "fallback"

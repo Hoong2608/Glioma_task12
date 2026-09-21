@@ -9,10 +9,17 @@
 
 ## 1. 需要上传哪些文件
 
-只上传 **`task1/` 整个目录**到服务器的仓库根目录（即与 `app/`、`core/` 同级）：
+只上传 **`task1/` 整个目录**到服务器**管线仓库的上一层**（与仓库目录同级，不再放进
+`app/`、`core/` 那一层）：
 
 ```text
-<服务器仓库根>/task1/            ← 上传这个目录
+<上一层>/
+├── Glioma_recognition/          ← 管线仓库（含 app/、core/，不要动）
+└── task1/                       ← 上传这个目录
+```
+
+```text
+task1/
 ├── __init__.py
 ├── _bootstrap.py               # 兼容直接执行脚本的路径兜底
 ├── config.py                   # 运行/训练配置（TASK1_* 环境变量）
@@ -33,9 +40,13 @@
 ├── configs/task1.env.example   # 环境变量样例（可直接改成生产值）
 ├── tests/test_task1.py         # 11 项自检
 ├── tests/test_task2.py         # 7 项自检（拼接/重复/闸门/端到端）
+├── tests/test_loader_alignment.py  # 4 项：与新版 Loader 的「原文件/SeriesType」对齐
 ├── weights/                    # 可选：公开代理数据权重（兜底/可选初始化，213 MB）
 └── artifacts/                  # 可选：本地验证证据（上传与否都不影响运行）
 ```
+
+> 另：`upload/运行命令汇总.txt` 是随包上传的操作速查（训练、标定、起服务、排错的全套命令），
+> 不属于代码包，删掉也不影响运行。
 
 上传建议：
 
@@ -50,17 +61,48 @@
 上传方式二选一：
 
 ```bash
-# 方式 A：直接 tar 整个目录（保留相对结构）
+# 方式 A：直接 tar 整个目录（保留相对结构），解到管线仓库的上一层
 tar czf task1.tar.gz task1
-scp task1.tar.gz <user>@<server>:/2026aicompetition/workspace/Glioma_recognition-main/
-ssh <user>@<server> 'cd /2026aicompetition/workspace/Glioma_recognition-main && tar xzf task1.tar.gz'
+scp task1.tar.gz <user>@<server>:/2026aicompetition/workspace/dcs/
+ssh <user>@<server> 'cd /2026aicompetition/workspace/dcs && tar xzf task1.tar.gz'
 
-# 方式 B：sftp / 平台文件上传，把 task1 目录整体放到仓库根目录
+# 方式 B：sftp / 平台文件上传，把 task1 目录整体放到管线仓库的上一层
 ```
 
-> 服务器仓库根目录以你方实际部署为准（本仓库解包后是
-> `Glioma_recognition-main/Glioma_recognition-main/`）。放好后确认
-> `<仓库根>/task1/train.py` 与 `<仓库根>/app/server.py` 同级。
+## 1.1 与新版管线框架的对接（2026-09 更新）
+
+新版 `Glioma_recognition-main` 对 `data/loader.py` 做了两条功能性变更，task1 已对齐：
+
+| 框架变更 | task1 的处理 |
+| --- | --- |
+| 序列目录里有多个 NIfTI 时，只读主名与目录名完全一致的 `<目录名>.nii(.gz)`；找不到唯一同名原文件直接报错 | `middle_slice.select_original_files()` 采用同一规则做全库中间层扫描（软版本：没有唯一原文件时保留全部，由框架负责报错）；`preprocess.list_series()` 优先 `<目录名>.nii.gz` → `<目录名>.nii` → 再回退第一个 |
+| 根目录 `SeriesType.xlsx` 覆盖 `Series.modality`（序列类型） | 任务一/任务二把序列类型写入诊断信息：`diagnostics["goal1"]["series"][*]["series_type"]`、`diagnostics["goal2"]["series_types"]` 与 `["stitched"]["series"][*]["series_type"]` |
+
+为什么必须对齐：如果全库扫描把序列目录里的派生副本（如 `SERIES-A(1).nii.gz`）也当检查影像，
+任务二会把「副本与别的检查原文件逐像素相同」判成重复影像，产生误报。回归用例见
+`tests/test_loader_alignment.py::test_group_dataset_ignores_derived_copies`。
+
+另外两点：
+
+* 新版框架新增依赖 `openpyxl`（读 `SeriesType.xlsx`），服务器必须重装**管线**依赖
+  `python -m pip install -r requirements.txt`；`task1/requirements.txt` 不需要改
+  （task1 只读框架解析好的 `Series.modality`）。
+* 上线前建议先用框架 Loader 预检测试集（它会一次性校验整棵文件树的「原文件」规则并读取
+  `SeriesType.xlsx`）：
+
+```bash
+cd <上一层>/<仓库目录>
+python -c "from data.loader import DatasetLoader; it=DatasetLoader().iter_studies('/data/testset'); s=next(it); print(s.accession_number, [(x.source_path.name, x.modality) for x in s.series])"
+```
+
+> 举例（本项目当前在服务器上的布局）：管线仓库是
+> `/2026aicompetition/workspace/dcs/Glioma_recognition/`，那么 `task1/` 应该位于
+> `/2026aicompetition/workspace/dcs/task1/`。放好后确认
+> `<上一层>/task1/train.py` 与 `<上一层>/<仓库名>/app/server.py` 并列存在。
+>
+> `task1/_bootstrap.py` 会自动在上一层里找到管线仓库（目录名是
+> `Glioma_recognition`、`Glioma_recognition-main` 或其它，只要里面有
+> `pipeline/inference.py`），所以两种布局都能跑。
 
 ## 2. 服务器上要改的东西
 
@@ -79,7 +121,7 @@ ssh <user>@<server> 'cd /2026aicompetition/workspace/Glioma_recognition-main && 
 ### 2.1 装依赖
 
 ```bash
-cd <仓库根>
+cd <上一层>                       # 例：/2026aicompetition/workspace/dcs
 python -m pip install -r task1/requirements.txt
 # CUDA 12.1 环境推荐（避免 pip 换成 CPU 版 torch）：
 # python -m pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu121
@@ -96,6 +138,8 @@ export TASK1_LOG_DIR=/2026aicompetition/workspace/logs        # 赛方要求的�
 # 推理（管线侧，仅环境变量）
 export COMPETITION_PIPELINE_FACTORY=task1.pipeline_factory:build_pipeline
 export TASK1_WEIGHTS=/2026aicompetition/workspace/task1_runs/best.pt
+# task1 在仓库外，必须让仓库能 import 到它（启动服务的那个 shell 里设置）
+export PYTHONPATH=/2026aicompetition/workspace/dcs${PYTHONPATH:+:$PYTHONPATH}
 ```
 
 ## 3. 服务器训练流程
@@ -103,7 +147,7 @@ export TASK1_WEIGHTS=/2026aicompetition/workspace/task1_runs/best.pt
 ### 步骤 0：数据体检（几秒钟，不需要 GPU）
 
 ```bash
-cd <仓库根>
+cd <上一层>                       # 所有 python -m task1.* 都在上一层执行
 python -m task1.dataset --data-root $TASK1_DATA_ROOT --out-dir $TASK1_RUN_DIR
 ```
 
@@ -167,7 +211,10 @@ $TASK1_LOG_DIR/training.jsonl   # 赛方规范日志（timestamp/epoch/step/phas
 ```bash
 export TASK1_WEIGHTS=$TASK1_RUN_DIR/best.pt
 export TASK1_DEVICE=auto
-cd <仓库根> && ./start.sh          # 或 python -m uvicorn app.server:app --host 0.0.0.0 --port 8000
+# PYTHONPATH 指向 task1 所在的上一层，否则仓库 import 不到 task1.pipeline_factory
+export PYTHONPATH=/2026aicompetition/workspace/dcs${PYTHONPATH:+:$PYTHONPATH}
+cd <上一层>/Glioma_recognition && ./start.sh
+# 或：cd <上一层>/Glioma_recognition && python -m uvicorn app.server:app --host 0.0.0.0 --port 8000
 ```
 
 自测：
@@ -195,14 +242,19 @@ python -m task1.run_local_eval --dataset <测试集目录> --output $TASK1_RUN_D
 服务器上先跑：
 
 ```bash
-cd <仓库根> && python -m unittest discover -s task1/tests -t . -v
+cd <上一层> && python -m unittest discover -s task1/tests -t . -v
 ```
+
+> 训练/自检命令在**上一层**执行（`task1` 作为包被导入）；**只有启动推理服务**
+> 需要 `cd` 进仓库目录，并保证 `PYTHONPATH` 含上一层。
 
 本地（Windows + RTX 3060 Laptop）已完成的验证：
 
-* 11 项自检全部通过：赛方目录扫描/标签/切分、特殊目录策略、后缀错标的 NIfTI 兜底读取、
+* 22 项自检全部通过（`test_task1.py` 11 + `test_task2.py` 7 + `test_loader_alignment.py` 4）：
+  赛方目录扫描/标签/切分、特殊目录策略、后缀错标的 NIfTI 兜底读取、
   从零训练→`best.pt`→推理可加载的完整闭环、与主文件夹推理口径的逐位等价、Goal1 契约、
-  管线端到端输出通过 `OutputValidator`。
+  管线端到端输出通过 `OutputValidator`；任务二的拼接/重复/闸门；以及与新版 Loader 的
+  「原文件选择 + SeriesType」对齐（含「派生副本导致重复误报」的回归用例）。
 * 与主文件夹等价性：预处理 `volume_to_slices` 结果逐位相等（`rtol=0, atol=0`）；
   打分与主文件夹 `AuthenticityPredictor.score_volume` 一致（误差 < 1e-6）。
 * 真实体数据短训练（公开代理数据，按赛方目录结构摆放 `annotation/fake|NORMAL…`）：

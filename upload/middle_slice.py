@@ -97,21 +97,57 @@ def signature_from_path(path: str | Path) -> str:
     return _fingerprint(middle_slice_from_path(path))
 
 
+def select_original_files(root: Path, files: Sequence[Path]) -> list[Path]:
+    """按新版管线 Loader 的「原文件」规则筛选 NIfTI（软版本）。
+
+    规则（对应 ``data/loader.py::_select_original_nifti_files``）：
+
+    * 相对根目录只剩 ≤2 段的文件（``<file>`` 或 ``<accession>/<file>``）全部保留；
+    * 更深的序列目录里，优先保留主名与目录名完全一致的 ``<目录名>.nii(.gz)``，
+      其余同目录文件（如 ``SERIES-A(1).nii.gz``）视为派生副本，不参与比对；
+    * 找不到唯一同名原文件时保留该目录下全部文件。管线 Loader 会在更早的
+      ``iter_studies`` 阶段直接报错，这里不再重复抛异常，避免自检脚本比主流程更严格。
+    """
+    selected: list[Path] = []
+    grouped: dict[Path, list[Path]] = defaultdict(list)
+    for path in files:
+        if len(path.relative_to(root).parts) <= 2:
+            selected.append(path)
+        else:
+            grouped[path.parent].append(path)
+
+    for directory, paths in grouped.items():
+        if len(paths) == 1:
+            selected.extend(paths)
+            continue
+        originals = [path for path in paths if _stem(path) == directory.name]
+        selected.extend(originals if len(originals) == 1 else paths)
+    return sorted(selected)
+
+
 def group_dataset(
     root: str | Path,
     skip_dirs: Sequence[Path] = (),
 ) -> dict[str, list[tuple[str, Path]]]:
-    """``{accession: [(series_uid, path), ...]}``：与管线 Loader 的分组规则一致。"""
+    """``{accession: [(series_uid, path), ...]}``：与管线 Loader 的发现规则一致。
+
+    只保留「原文件」（见 ``select_original_files``），这样全库中间层指纹索引与
+    管线实际加载的影像完全对应——否则序列目录里的派生副本会让重复检测误报。
+    """
     root = Path(root).expanduser().resolve()
     if not root.is_dir():
         return {}
     resolved_skips = [Path(path).resolve() for path in skip_dirs if path is not None]
-    grouped: dict[str, list[tuple[str, Path]]] = defaultdict(list)
+    candidates: list[Path] = []
     for path in sorted(root.rglob("*")):
         if not path.is_file() or not is_image(path):
             continue
         if any(_is_within(path.resolve(), skip) for skip in resolved_skips):
             continue
+        candidates.append(path)
+
+    grouped: dict[str, list[tuple[str, Path]]] = defaultdict(list)
+    for path in select_original_files(root, candidates):
         relative = path.relative_to(root)
         accession = relative.parts[0] if len(relative.parts) > 1 else _stem(path)
         if len(relative.parts) > 1 and path.parent != root / relative.parts[0]:

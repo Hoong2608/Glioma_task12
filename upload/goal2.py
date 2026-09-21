@@ -42,6 +42,7 @@ from tasks.results import (  # noqa: E402
 )
 
 from .middle_slice import DuplicateIndex, ScanReport, dataset_root_of, signature_from_array
+from .preprocess import series_types
 from .stitched import (  # noqa: E402
     DEFAULT_BAND,
     DEFAULT_SCALE,
@@ -234,6 +235,7 @@ class SpecialImageTask(StudyTask[StitchedResult]):
     def predict(self, context) -> StitchedResult:
         study = context.study
         config = self.config
+        types = series_types(study)
 
         stitched_score = 0.0
         stitched_detail: dict[str, object] = {}
@@ -246,6 +248,8 @@ class SpecialImageTask(StudyTask[StitchedResult]):
             )
             stitched_score = result.score
             stitched_detail = result.as_dict()
+        for item in stitched_detail.get("series", []):
+            item["series_type"] = types.get(str(item.get("series_uid", "")), "")
         probability = probability_from_score(
             stitched_score,
             config.stitched_threshold,
@@ -261,6 +265,7 @@ class SpecialImageTask(StudyTask[StitchedResult]):
         context.diagnostics[DIAGNOSTIC_KEY] = {
             "AccessionNumber": study.accession_number,
             "IsStitchedProb": probability,
+            "series_types": types,
             "stitched": {
                 "score": stitched_score,
                 "threshold": config.stitched_threshold,

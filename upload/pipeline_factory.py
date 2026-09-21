@@ -1,8 +1,12 @@
 """任务一 / 任务二的管线工厂（``COMPETITION_PIPELINE_FACTORY`` 的入口）。
 
-``task1`` 就在仓库根目录内，所以**不需要改动任何管线文件**：把环境变量
-``COMPETITION_PIPELINE_FACTORY`` 指向本模块，``core.registry.build_pipeline()``
-即可从仓库根目录导入它。
+``task1`` 现在位于管线仓库的**上一层**（与仓库目录同级），因此**不需要改动任何管线
+文件**：把环境变量 ``COMPETITION_PIPELINE_FACTORY`` 指向本模块，并让启动推理服务的
+进程能 import 到 ``task1``——即把 task1 所在的上一层加进 ``PYTHONPATH``：
+
+.. code-block:: sh
+
+    export PYTHONPATH=/2026aicompetition/workspace/dcs${PYTHONPATH:+:$PYTHONPATH}
 
 任务链顺序（由本工厂决定，管线只按顺序调用）：
 

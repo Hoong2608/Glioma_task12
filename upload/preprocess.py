@@ -193,8 +193,12 @@ def volume_to_slices(
 def list_series(case_dir: str | Path) -> list[tuple[str, Path]]:
     """列出一个检查目录下的 ``[(series_uid, nifti_path), ...]``。
 
-    主布局是比赛格式 ``<case>/<SeriesUid>/<SeriesUid>.nii.gz``；
+    主布局是比赛格式 ``<case>/<SeriesUid>/<SeriesUid>.nii(.gz)``；
     平铺的 ``*.nii(.gz)`` 目录作为兜底，方便直接跑公开代理数据。
+
+    序列目录里可能有多个 NIfTI（例如 ``SERIES-A(1).nii.gz`` 这种派生副本），
+    这里与新版管线 Loader 保持一致：优先取主名与目录名完全一致的
+    ``<目录名>.nii.gz`` / ``<目录名>.nii``，都没有才回退到排序后的第一个。
     """
     case_dir = Path(case_dir)
     items: list[tuple[str, Path]] = []
@@ -202,9 +206,18 @@ def list_series(case_dir: str | Path) -> list[tuple[str, Path]]:
         return items
 
     for series_dir in sorted(path for path in case_dir.iterdir() if path.is_dir()):
-        candidate = series_dir / f"{series_dir.name}.nii.gz"
-        if candidate.is_file():
-            items.append((series_dir.name, candidate))
+        original = next(
+            (
+                candidate
+                for candidate in (
+                    series_dir / f"{series_dir.name}{suffix}" for suffix in NIFTI_SUFFIXES
+                )
+                if candidate.is_file()
+            ),
+            None,
+        )
+        if original is not None:
+            items.append((series_dir.name, original))
             continue
         nested = sorted(
             path for path in series_dir.iterdir()
@@ -224,3 +237,15 @@ def list_series(case_dir: str | Path) -> list[tuple[str, Path]]:
                     break
             items.append((stem, path))
     return items
+
+
+def series_types(study) -> dict[str, str]:
+    """``{series_uid: 序列类型}``。
+
+    新版管线 Loader 会用根目录的 ``SeriesType.xlsx`` 覆盖 ``Series.modality``，
+    所以这里直接取框架已经解析好的值用于日志与诊断。
+    """
+    return {
+        series.series_uid: str(series.modality or "")
+        for series in getattr(study, "series", ())
+    }
