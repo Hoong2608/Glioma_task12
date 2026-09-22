@@ -9,7 +9,7 @@ bash tasks/goal1_authenticity/verify.sh \
 #   --dataset /data/testset_subset
 
 
-
+bash tasks/goal1_authenticity/verify.sh --source /2026aicompetition/workspace/task1_runs/seed42/best.pt --make-subset 8
 
 
 
