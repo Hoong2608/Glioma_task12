@@ -1,36 +1,66 @@
-cd /2026aicompetition/workspace/dcs
-python - <<'PY'
-import collections, os
-from pathlib import Path
-import nibabel as nib
+cd /2026aicompetition/workspace/dcs/Glioma_recognition
+chmod +x tasks/goal1_authenticity/verify.sh
 
-root = Path(os.environ.get('TASK1_DATA_ROOT', '/2026aicompetition/datasets/training'))
-comp = root / 'annotation' / 'Composition'
-print('Composition 目录:', comp, '存在:', comp.is_dir())
+# 首次：把训练产物迁移到规范路径，并跑完整验证
+bash tasks/goal1_authenticity/verify.sh \
+  --source /2026aicompetition/workspace/task1_runs/seed42/best.pt --also-last
 
-files = [p for p in comp.rglob('*') if p.is_file()]
-print('文件总数:', len(files))
-print('扩展名分布:', dict(collections.Counter(p.suffix.lower() for p in files).most_common(10)))
-print('无扩展名文件数:', sum(1 for p in files if not p.suffix))
-print('目录深度示例:', [str(p.relative_to(comp)) for p in files[:5]])
+# 想额外做一次离线打分就再加：
+#   --dataset /data/testset_subset
 
-HINTS = ('mask', 'seg', 'label', 'roi')
-nii = [p for p in files if p.name.lower().endswith(('.nii', '.nii.gz'))]
-kept = [p for p in nii if not any(h in p.name.lower() for h in HINTS)]
-print('NIfTI 文件数:', len(nii), '| 通过名称过滤的:', len(kept))
-if len(nii) != len(kept):
-    print('  被 mask/seg/label/roi 过滤掉的前几个:', [p.name for p in nii if p not in kept][:5])
 
-print('--- 试读前 3 个 NIfTI ---')
-for p in nii[:3]:
-    try:
-        img = nib.load(str(p))
-        print('  OK  ', p.name, img.shape, img.get_data_dtype())
-    except Exception as exc:
-        print('  FAIL', p.name, type(exc).__name__, str(exc)[:120])
 
-print('--- 前 3 个文件的魔数（判断真实格式）---')
-for p in files[:3]:
-    head = p.read_bytes()[:160]
-    print(' ', p.name, '| 开头:', head[:4].hex(), '| 偏移128:', head[128:132])
-PY
+
+
+
+
+
+
+
+cd /2026aicompetition/workspace/dcs/Glioma_recognition
+
+# ── 1. 环境与入口 ─────────────────────────────────────────────
+python -c "import fastapi, uvicorn, numpy, nibabel, openpyxl, torch, timm; print('deps ok', torch.__version__, torch.cuda.is_available())"
+python -c "import tasks.real_pipeline as rp; print('factory ok:', rp.__name__)"
+
+# ── 2. 权重迁移到规范路径 ─────────────────────────────────────
+python -m tasks.goal1_authenticity.migrate_checkpoint --dry-run
+python -m tasks.goal1_authenticity.migrate_checkpoint \
+  --source /2026aicompetition/workspace/task1_runs/seed42/best.pt --also-last
+ls -lh /2026aicompetition/workspace/checkpoint/goal1_authenticity/
+python -c "import json;print(json.load(open('/2026aicompetition/workspace/checkpoint/goal1_authenticity/model_meta.json')))"
+
+# ── 3. 单元 + 契约测试（期望 19 项全绿）─────────────────────
+python -m unittest discover -s tests -t . -v
+
+# ── 4. 离线打分（把 <小数据集目录> 换成几百例的子集即可，几分钟）──
+python -m tasks.goal1_authenticity.evaluate --dataset <小数据集目录> --out-dir /tmp/goal1_check
+cat /tmp/goal1_check/metrics.json      # 有标签时才有；否则看逐例概率
+head -n 3 /tmp/goal1_check/authenticity_scores.jsonl
+
+# ── 5. 服务级端到端（起真服务 + /call + 回调 + 输出校验）────
+export COMPETITION_PIPELINE_FACTORY=tasks.real_pipeline:build_pipeline
+export GOAL1_DEVICE=auto
+python -m scripts.mock_competition --timeout 300
+# 期望输出：PASS Health / PASS Call response time / PASS Background execution
+#           / PASS Output and NIfTI validation / PASS Callback
+
+
+cd /2026aicompetition/workspace/dcs/Glioma_recognition
+export COMPETITION_PIPELINE_FACTORY=tasks.real_pipeline:build_pipeline
+export GOAL1_DEVICE=auto
+export COMPETITION_CALLBACK_URL='<平台页面上的完整回调地址>'
+./start.sh                      # 前台常驻（测评容器就让它当前台进程）
+curl http://127.0.0.1:8000/health
+
+
+cat > /2026aicompetition/workspace/start_infer.sh <<'EOX'
+#!/usr/bin/env bash
+set -euo pipefail
+export COMPETITION_PIPELINE_FACTORY=tasks.real_pipeline:build_pipeline
+export GOAL1_DEVICE=auto
+export COMPETITION_CALLBACK_URL='<平台提供的回调地址>'
+cd /2026aicompetition/workspace/dcs/Glioma_recognition
+exec ./start.sh
+EOX
+chmod +x /2026aicompetition/workspace/start_infer.sh
