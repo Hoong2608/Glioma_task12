@@ -245,3 +245,106 @@ python -c "from data.loader import DatasetLoader; it=DatasetLoader().iter_studie
 ================================================================================
 （本文件仅作操作记录，不属于 task1 代码包；上传与否都不影响运行）
 ================================================================================
+
+
+
+
+已更新版本后，按这个顺序跑就行（都在仓库根目录 `cd /2026aicompetition/workspace/dcs/Glioma_recognition`）。
+
+## 1. 先确认接线对了（3 秒）
+
+```bash
+cd /2026aicompetition/workspace/dcs/Glioma_recognition
+grep -nE "Goal2StitchedTask|Goal2DuplicateRecorder|DummyStitchedTask|DummyDuplicateTask" tasks/real_pipeline.py
+python -m unittest tests.contracts.test_goal2_contract -v
+```
+
+期望：**只**看到 `Goal2StitchedTask` / `Goal2DuplicateRecorder`（没有 Dummy），测试 **18/18 全过**。
+
+## 2. 标定 + 离线检查 + 端到端（两条命令，各五阶段）
+
+```bash
+export WORKSPACE=/2026aicompetition/workspace
+export DATA_ROOT=/2026aicompetition/datasets/training
+export RUN_DIR=$WORKSPACE/Glioma_task12_runs
+export CHECKPOINT_ROOT=$WORKSPACE/checkpoint      # 标定文件落这里，服务也从这里读
+
+# 拼接：Composition vs 正常影像 → 按目标 FPR 取阈值，写 calibration.json
+bash tasks/goal2_stitched/verify.sh --data-root "$DATA_ROOT" --checkpoint-root "$CHECKPOINT_ROOT" \
+     --out-dir "$RUN_DIR" --workers 8 --target-fpr 0.05
+
+# 重复：金标准图像对级 AUC-PR → 相似度中心，写 calibration.json
+bash tasks/goal2_duplicate/verify.sh --data-root "$DATA_ROOT" --checkpoint-root "$CHECKPOINT_ROOT" \
+     --out-dir "$RUN_DIR" --workers 8 --target-fpr 0.10
+```
+
+想先几分钟看个口径再加 `--max-volumes 500`（抽样），确认没跑歪再全量重跑。
+
+产物：`$RUN_DIR/stitched_calibration.json`、`$RUN_DIR/duplicate_evaluation.json`，以及服务真正读取的
+`$CHECKPOINT_ROOT/goal2_stitched/calibration.json`、`$CHECKPOINT_ROOT/goal2_duplicate/calibration.json`。
+
+## 3. 确认服务会读到什么
+
+```bash
+export COMPETITION_PIPELINE_FACTORY=tasks.real_pipeline:build_pipeline
+python -c "
+from tasks.goal2_stitched.config import Goal2StitchedConfig
+from tasks.goal2_duplicate.config import Goal2DuplicateConfig
+print(Goal2StitchedConfig.from_env().describe())
+print(Goal2DuplicateConfig.from_env().describe())"
+```
+
+看两个 `calibration_file` 是否指向刚写出的文件。**注意**：如果之前 export 过 `GOAL2_STITCHED_THRESHOLD` / `GOAL2_DUPLICATE_SIM_CENTER`，它会覆盖标定文件——确认无误就 `unset` 掉。
+
+## 4. 起服务
+
+```bash
+export COMPETITION_PIPELINE_FACTORY=tasks.real_pipeline:build_pipeline
+export COMPETITION_CALLBACK_URL='<平台给的完整回调地址>'
+export GOAL1_DEVICE=auto
+export GOAL2_CHECKPOINT_ROOT=$CHECKPOINT_ROOT
+export GOAL2_GATED_FIELDS=goal3,goal4,goal5     # 不想让下游被闸门停掉就写空串
+./start.sh                                       # 后台：nohup ./start.sh > $WORKSPACE/logs/serve.log 2>&1 &
+```
+
+## 5. 起完自检
+
+```bash
+curl http://127.0.0.1:8000/health
+curl -X POST http://127.0.0.1:8000/call -H 'Content-Type: application/json' \
+  -d '{"request_id":"t-1","team_id":"team","track_code":"track4","input":{"evaluation_id":"e-1","dataset_path":"<一个小 NIfTI 目录>"}}'
+ls -l $WORKSPACE/answer/e-1/                                   # 应有 duplicate_pairs.jsonl + 每例目录
+python -c "import json;d=json.load(open('$WORKSPACE/answer/e-1/<检查号>/prediction.json'));print(d.get('IsStitchedProb'), d.get('IsNotHumanBodyProb'))"
+head -3 $WORKSPACE/answer/e-1/duplicate_pairs.jsonl            # 至少一行，按 PairProb 降序
+tail -5 $WORKSPACE/logs/inference.jsonl                        # 运行日志
+```
+
+如果第 2 步有数据但暂时不想等全量标定，也可以先起服务用默认阈值跑通链路，之后再补标定 —— 标定文件放进去重启即可生效（不用改代码）。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
