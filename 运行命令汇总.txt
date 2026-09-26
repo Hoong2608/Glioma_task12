@@ -346,7 +346,17 @@ python -m tasks.goal2_duplicate.dataset --data-root "$DATA_ROOT"
 
 
 
+cd /2026aicompetition/workspace/dcs/Glioma_recognition
 
+# 1) 先确认变量到底有没有值（大概率是空的）
+echo "[$DATA_ROOT]"
+
+# 2) 确认数据是否挂载到这台 pod 上
+ls -d /2026aicompetition/datasets/training
+ls /2026aicompetition/datasets/training | head
+
+# 3) 用绝对路径重跑体检
+python -m tasks.goal2_stitched.dataset --data-root /2026aicompetition/datasets/training
 
 
 
