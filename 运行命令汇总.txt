@@ -334,7 +334,12 @@ tail -5 $WORKSPACE/logs/inference.jsonl                        # 运行日志
 
 
 
+cd /2026aicompetition/workspace/dcs/Glioma_recognition
+cp -a tasks/goal2_stitched/dataset.py /tmp/dataset.stitched.bak.py
+# 上传覆盖：tasks/goal2_stitched/dataset.py、tasks/goal2_duplicate/dataset.py、tests/contracts/test_goal2_contract.py
 
+python -m tasks.goal2_stitched.dataset --data-root "$DATA_ROOT"
+python -m tasks.goal2_duplicate.dataset --data-root "$DATA_ROOT"
 
 
 
