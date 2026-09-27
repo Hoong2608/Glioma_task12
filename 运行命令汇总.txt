@@ -387,7 +387,31 @@ python -m tasks.goal2_duplicate.evaluate \
 
 
 
+cd /2026aicompetition/workspace/dcs/Glioma_recognition
 
+# ① 拼接标定：先抽样跑，几分钟出结果，确认口径对不对
+python -m tasks.goal2_stitched.evaluate \
+  --data-root /2026aicompetition/datasets/training \
+  --out-dir /2026aicompetition/workspace/Glioma_task12_runs \
+  --checkpoint-root /2026aicompetition/workspace/checkpoint \
+  --target-fpr 0.05 --workers 8 --max-volumes 2000
+
+# ② 确认指标 OK 后，去掉 --max-volumes 跑全量（会读约 1 万卷）
+python -m tasks.goal2_stitched.evaluate \
+  --data-root /2026aicompetition/datasets/training \
+  --out-dir /2026aicompetition/workspace/Glioma_task12_runs \
+  --checkpoint-root /2026aicompetition/workspace/checkpoint \
+  --target-fpr 0.05 --workers 8
+
+# ③ 重复：金标准体检（看 gold_pairs 是否 >0）
+python -m tasks.goal2_duplicate.dataset --data-root /2026aicompetition/datasets/training
+
+# ④ 重复标定（全库检索，主要耗时在这里）
+python -m tasks.goal2_duplicate.evaluate \
+  --data-root /2026aicompetition/datasets/training \
+  --out-dir /2026aicompetition/workspace/Glioma_task12_runs \
+  --checkpoint-root /2026aicompetition/workspace/checkpoint \
+  --target-fpr 0.10 --workers 8
 
 
 
