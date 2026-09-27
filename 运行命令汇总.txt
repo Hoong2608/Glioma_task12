@@ -449,6 +449,42 @@ ls -l /2026aicompetition/workspace/answer/e-1/ && head -3 /2026aicompetition/wor
 
 
 
+cd /2026aicompetition/workspace/dcs/Glioma_recognition
+
+# ── 阶段1：环境与依赖 ─────────────────────────────────────────
+python -c "import numpy, nibabel, openpyxl, fastapi, uvicorn; print('deps ok')"
+
+# ── 阶段2：接线与标定落盘检查（对应任务一的"权重规范路径"） ──────
+sha256sum tasks/real_pipeline.py
+python -c "from tasks.real_pipeline import build_pipeline; p=build_pipeline(); print([type(b.task).__name__ for b in p.study_tasks], type(p.duplicate_task).__name__)"
+ls -l /2026aicompetition/workspace/checkpoint/goal2_stitched/calibration.json \
+      /2026aicompetition/workspace/checkpoint/goal2_duplicate/calibration.json
+python -c "
+from tasks.goal2_stitched.config import Goal2StitchedConfig
+from tasks.goal2_duplicate.config import Goal2DuplicateConfig
+print(Goal2StitchedConfig.from_env().describe())
+print(Goal2DuplicateConfig.from_env().describe())"
+
+# ── 阶段3：单元与契约测试（对应任务一的 unittest） ───────────────
+find tasks tests -type d -name __pycache__ -prune -exec rm -rf {} +
+python -m unittest discover -s tests -t . -v
+
+# ── 阶段4：标定 + 离线自检（不起服务） ─────────────────────────
+# 4.1 拼接：阶段1-4 一键（--skip-service = 不起服务）
+bash tasks/goal2_stitched/verify.sh \
+  --data-root /2026aicompetition/datasets/training \
+  --checkpoint-root /2026aicompetition/workspace/checkpoint \
+  --out-dir /2026aicompetition/workspace/Glioma_task12_runs \
+  --workers 8 --target-fpr 0.05 --skip-service
+
+# 4.2 重复：同上
+bash tasks/goal2_duplicate/verify.sh \
+  --data-root /2026aicompetition/datasets/training \
+  --checkpoint-root /2026aicompetition/workspace/checkpoint \
+  --out-dir /2026aicompetition/workspace/Glioma_task12_runs \
+  --workers 8 --target-fpr 0.10 --skip-service
+
+
 
 
 
