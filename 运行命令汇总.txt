@@ -417,6 +417,29 @@ python -m tasks.goal2_duplicate.evaluate \
 
 
 
+# 1) 看拼接标定的结果（如果还没跑，先跑；命令我上一条给过）
+python -c "
+import json;p=json.load(open('/2026aicompetition/workspace/Glioma_task12_runs/stitched_calibration.json'))
+print({k:p.get(k) for k in ('positive_kind','positives','negatives','threshold','recall_at_threshold','negative_fpr_at_threshold','positive_score_median','negative_score_median')});print(p['ranking_metrics'])"
+
+# 2) 确认服务会读到什么（两条 calibration.json 都要在）
+cat /2026aicompetition/workspace/checkpoint/goal2_stitched/calibration.json
+cat /2026aicompetition/workspace/checkpoint/goal2_duplicate/calibration.json
+
+# 3) 起服务
+cd /2026aicompetition/workspace/dcs/Glioma_recognition
+export COMPETITION_PIPELINE_FACTORY=tasks.real_pipeline:build_pipeline
+export COMPETITION_CALLBACK_URL='<平台回调地址>'
+export GOAL2_CHECKPOINT_ROOT=/2026aicompetition/workspace/checkpoint
+export GOAL2_GATED_FIELDS=goal3,goal4,goal5          # 不想上闸就置空
+nohup ./start.sh > /2026aicompetition/workspace/logs/serve.log 2>&1 &
+sleep 20 && curl http://127.0.0.1:8000/health
+
+# 4) 一次完整调用自检（首次会先扫全库建索引，比平时慢）
+curl -X POST http://127.0.0.1:8000/call -H 'Content-Type: application/json' \
+  -d '{"request_id":"t-1","team_id":"team","track_code":"track4","input":{"evaluation_id":"e-1","dataset_path":"<一个小 NIfTI 目录>"}}'
+ls -l /2026aicompetition/workspace/answer/e-1/ && head -3 /2026aicompetition/workspace/answer/e-1/duplicate_pairs.jsonl
+
 
 
 
