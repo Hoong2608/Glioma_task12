@@ -362,4 +362,49 @@ python -m tasks.goal2_stitched.dataset --data-root /2026aicompetition/datasets/t
 
 
 
+cd /2026aicompetition/workspace/dcs/Glioma_recognition
+
+# 1) 体检：这次应该看到 positive_kind=compositing、positives>0
+python -m tasks.goal2_stitched.dataset --data-root /2026aicompetition/datasets/training
+
+# 2) 拼接标定（先用抽样快速看口径，几分钟出结果）
+python -m tasks.goal2_stitched.evaluate \
+  --data-root /2026aicompetition/datasets/training \
+  --out-dir /2026aicompetition/workspace/Glioma_task12_runs \
+  --checkpoint-root /2026aicompetition/workspace/checkpoint \
+  --target-fpr 0.05 --workers 8 --max-volumes 2000
+
+# 3) 重复金标准体检（确认 gold 文件与配对数）
+python -m tasks.goal2_duplicate.dataset --data-root /2026aicompetition/datasets/training
+
+# 4) 重复标定（正类 = 金标准对；这一步是全库检索，主要成本在这里）
+python -m tasks.goal2_duplicate.evaluate \
+  --data-root /2026aicompetition/datasets/training \
+  --out-dir /2026aicompetition/workspace/Glioma_task12_runs \
+  --checkpoint-root /2026aicompetition/workspace/checkpoint \
+  --target-fpr 0.10 --workers 8
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+p
+
 
